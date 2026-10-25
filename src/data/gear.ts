@@ -85,7 +85,9 @@ export function rollGear(rng: Rng, cls: ClassId, wave: number, slot?: GearSlot):
   slot ??= rng.pick<GearSlot>(['weapon', 'armor', 'trinket']);
   const base = slot === 'weapon' ? CLASSES[cls].weapon : slot === 'armor' ? ARMOR[cls] : rng.pick(TRINKETS);
   const statCount = rarity === 'rare' ? 2 : 1;
-  const options = rng.shuffle(ROLLS[slot].slice()).slice(0, statCount);
+  const healer = cls === 'priest' || cls === 'paladin';
+  const pool = ROLLS[slot].filter(([k]) => healer || k !== 'healPct');
+  const options = rng.shuffle(pool).slice(0, statCount);
   const mods: StatMods = {};
   for (const [k, v] of options) {
     mods[k] = round(k, v * RARITY_MULT[rarity] * (0.8 + rng.next() * 0.4) * growth * (statCount === 2 ? 0.75 : 1));

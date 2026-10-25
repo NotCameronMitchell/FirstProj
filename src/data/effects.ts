@@ -449,7 +449,7 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: 'flask',
     name: 'Crimson Flask',
-    desc: (l) => (l === 0 ? 'Once per run, revive the whole party when it falls.' : `Revive the party at ${30 + l * 15}% HP, once per run${l >= 3 ? ' (2 charges)' : ''}.`),
+    desc: (l) => `When the party falls, revive everyone at ${30 + l * 15}% HP. ${l >= 3 ? 'Twice' : 'Once'} per run.`,
     max: 3,
     cost: (l) => [120, 260, 600][l] ?? 0,
   },
