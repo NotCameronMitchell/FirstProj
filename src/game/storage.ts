@@ -1,7 +1,7 @@
 import type { LeaderboardEntry, MetaState, RunState } from '../types';
 import { RUN_VERSION } from './run';
 
-const KEYS = { meta: 'fott.meta', run: 'fott.run', board: 'fott.board' };
+const KEYS = { meta: 'qvb.meta', run: 'qvb.run', board: 'qvb.board' };
 
 function read<T>(key: string): T | null {
   try {
@@ -22,7 +22,7 @@ function write(key: string, value: unknown): void {
 }
 
 export function freshMeta(): MetaState {
-  return { version: 1, embers: 0, upgrades: {}, runs: 0, bestWave: 0, seenLore: [] };
+  return { version: 1, sauce: 0, totalSauce: 0, upgrades: {}, runs: 0, bestStage: 0, outfits: {}, ownedOutfits: [], party: [], achievements: [], stats: {} };
 }
 
 export function loadMeta(): MetaState {
@@ -47,18 +47,7 @@ export function loadBoard(): LeaderboardEntry[] {
 }
 
 export function recordRun(entry: LeaderboardEntry): { board: LeaderboardEntry[]; rank: number } {
-  const board = [...loadBoard(), entry].sort((a, b) => b.wave - a.wave || b.kills - a.kills).slice(0, 50);
+  const board = [...loadBoard(), entry].sort((a, b) => b.stage - a.stage || b.kills - a.kills).slice(0, 25);
   write(KEYS.board, board);
   return { board, rank: board.indexOf(entry) };
-}
-
-/** Best result for each distinct party composition (order-independent). */
-export function bestByParty(board: LeaderboardEntry[]): LeaderboardEntry[] {
-  const best = new Map<string, LeaderboardEntry>();
-  for (const e of board) {
-    const k = [...e.party].sort().join('+');
-    const cur = best.get(k);
-    if (!cur || e.wave > cur.wave) best.set(k, e);
-  }
-  return [...best.values()].sort((a, b) => b.wave - a.wave);
 }

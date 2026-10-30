@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, then serve cache-first with a network refresh.
-const CACHE = 'fott-v1';
+const CACHE = 'qvb-v1';
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icon.svg'])));
   self.skipWaiting();

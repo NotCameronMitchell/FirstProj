@@ -1,574 +1,533 @@
-import { makeUnit, type Unit } from '../combat/battle';
-import type { AttackKind, Row } from '../types';
-import type { Targeting } from '../combat/battle';
+import type { Battle, Style, Unit } from '../combat/battle';
+
+export interface EnemySkill {
+  id: string;
+  name: string;
+  cd: number;
+  first?: number;
+  ult?: boolean;
+  use: (b: Battle, u: Unit) => void;
+}
 
 export interface EnemyDef {
   id: string;
   name: string;
   sprite: string;
-  row: Row;
+  blurb: string;
   hp: number;
   atk: number;
-  armor?: number;
-  interval: number;
-  crit?: number;
+  def?: number;
   dodge?: number;
-  lifesteal?: number;
-  ranged?: boolean;
-  attackKind?: AttackKind;
-  targeting?: Targeting;
-  cost: number;
+  crit?: number;
   boss?: boolean;
-  size?: number;
-  lore: string;
-  /** Called after the unit is created, to attach behaviour. */
-  setup?: (u: Unit) => void;
+  style: Style;
+  color?: string;
+  quotes?: string[];
+  /** Checked in order each turn; the first one off cooldown is used. */
+  skills: EnemySkill[];
 }
 
-/** Repeats `fn` every `period` seconds of the unit's life. */
-function every(u: Unit, key: string, period: number, dt: number, fn: () => void): void {
-  u.timers[key] = (u.timers[key] ?? period * 0.6) - dt;
-  if (u.timers[key] <= 0) {
-    u.timers[key] += period;
-    fn();
-  }
+/** Hits every hero for `mult` x ATK. */
+function aoe(b: Battle, u: Unit, mult: number, color: string): Unit[] {
+  b.anim(u, undefined, 'cast', { color: `rgb(${color})` });
+  b.aoe('hero', color);
+  const hs = b.foesOf(u);
+  for (const h of hs) b.hit(u, h, mult);
+  return hs;
 }
 
-function onHitStatus(kind: 'burn' | 'bleed', chance: number, powerMult: number, dur = 3) {
-  return (u: Unit) => {
-    u.onHitLand = (b, self, tgt, dmg) => {
-      if (dmg > 0 && b.rng.chance(chance)) b.addStatus(tgt, kind, dur, self.atk * powerMult, self);
-    };
-  };
+function single(b: Battle, u: Unit, mult: number, style: Style = 'melee'): Unit | undefined {
+  const t = b.pickHeroTarget(u);
+  if (!t) return undefined;
+  b.anim(u, t, style);
+  return b.hit(u, t, mult) > 0 ? t : undefined;
 }
 
-const E: EnemyDef[] = [
-  // ---- Region I: The Ashen Plains ----
-  {
-    id: 'hollow',
-    name: 'Hollow Soldier',
-    sprite: 'hollow',
-    row: 'front',
-    hp: 150,
-    atk: 11,
-    armor: 10,
-    interval: 1.3,
-    cost: 1,
-    lore: 'He kept marching after the war ended. After his name ended. After he did.',
+/** The hero hitting hardest right now (the HR Rep and the Logistics Director single them out). */
+function strongest(b: Battle, u: Unit): Unit | undefined {
+  return b.foesOf(u).sort((x, y) => y.atk * b.mult(y) - x.atk * b.mult(x))[0];
+}
+
+function quip(b: Battle, u: Unit, chance = 0.5): void {
+  const q = ENEMIES[u.key].quotes;
+  if (q && b.rng.chance(chance)) b.say(u, b.rng.pick(q));
+}
+
+export const ENEMIES: Record<string, EnemyDef> = {
+  // ------------------------------------------------------------ minions
+  energy_drink: {
+    id: 'energy_drink',
+    name: 'Energy Drink',
+    sprite: 'energy_drink',
+    blurb: '300mg of caffeine with legs. Sometimes hits twice.',
+    hp: 34,
+    atk: 6,
+    dodge: 0.08,
+    style: 'melee',
+    skills: [
+      {
+        id: 'rush',
+        name: 'Caffeine Rush',
+        cd: 3,
+        first: 1,
+        use(b, u) {
+          single(b, u, 0.8);
+          b.beat(0.2);
+          single(b, u, 0.8);
+        },
+      },
+    ],
   },
-  {
-    id: 'hollow_archer',
-    name: 'Hollow Archer',
-    sprite: 'hollow_archer',
-    row: 'back',
-    hp: 95,
-    atk: 12,
-    interval: 1.6,
-    ranged: true,
-    attackKind: 'arrow',
-    cost: 1,
-    lore: 'Her arrows are rusted. So is her aim. It does not matter; there are many of her.',
-  },
-  {
-    id: 'carrion_hound',
-    name: 'Carrion Hound',
-    sprite: 'hound',
-    row: 'front',
-    hp: 95,
+  tallboy: {
+    id: 'tallboy',
+    name: 'Tallboy Energy',
+    sprite: 'tallboy',
+    blurb: 'A 24oz can that hypes up its friends.',
+    hp: 52,
     atk: 7,
-    interval: 0.7,
+    style: 'melee',
+    skills: [
+      {
+        id: 'sugar',
+        name: 'Sugar Rush',
+        cd: 3,
+        first: 1,
+        use(b, u) {
+          b.anim(u, undefined, 'cast', { color: '#ffd23f' });
+          for (const a of b.alliesOf(u)) b.addStatus(a, 'empower', 2, 0.25);
+        },
+      },
+    ],
+  },
+  nic_pouch: {
+    id: 'nic_pouch',
+    name: 'Nicotine Pouch',
+    sprite: 'nic_pouch',
+    blurb: 'Tucked in a lip somewhere. Its hits Poison.',
+    hp: 26,
+    atk: 5,
     dodge: 0.1,
-    attackKind: 'claw',
-    cost: 1,
-    setup: onHitStatus('bleed', 0.25, 0.3),
-    lore: 'Bred to clear battlefields of the dead. The dead were not enough.',
+    style: 'melee',
+    skills: [
+      {
+        id: 'tuck',
+        name: 'Lip Tuck',
+        cd: 2,
+        use(b, u) {
+          const t = single(b, u, 0.9);
+          if (t) b.dot(u, t, 'poison', 0.5, 3);
+        },
+      },
+    ],
   },
-  {
-    id: 'grave_warden',
-    name: 'Grave Warden',
-    sprite: 'warden',
-    row: 'front',
-    hp: 340,
-    atk: 15,
-    armor: 55,
-    interval: 1.8,
-    cost: 3,
-    lore: 'Sworn to guard the barrows. Nobody told him the barrows were empty.',
+  pouch_tin: {
+    id: 'pouch_tin',
+    name: 'Pouch Tin',
+    sprite: 'pouch_tin',
+    blurb: 'A whole tin of them. Sturdy, and it weakens the party.',
+    hp: 60,
+    atk: 6,
+    def: 0.15,
+    style: 'melee',
+    skills: [
+      {
+        id: 'mint',
+        name: 'Cool Mint Cloud',
+        cd: 4,
+        first: 1,
+        use(b, u) {
+          for (const h of aoe(b, u, 0.4, '160,240,255')) b.addStatus(h, 'weaken', 2, 0.15, undefined, true);
+        },
+      },
+    ],
   },
-  {
-    id: 'grafted_hand',
-    name: 'Grafted Arm',
-    sprite: 'grafted_hand',
-    row: 'front',
-    hp: 130,
-    atk: 9,
-    interval: 1.0,
-    attackKind: 'claw',
-    cost: 99,
-    lore: 'It still wears a ring. It still wants it back.',
+  reply_all: {
+    id: 'reply_all',
+    name: 'Reply-All Guy',
+    sprite: 'reply_all',
+    blurb: 'Hits everyone, every time.',
+    hp: 42,
+    atk: 6,
+    style: 'ranged',
+    color: '#ffffff',
+    quotes: ['Per my last email...', 'Adding the whole team!', 'Thanks all!!'],
+    skills: [
+      {
+        id: 'reply',
+        name: 'Reply All',
+        cd: 2,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.4);
+          aoe(b, u, 0.6, '255,255,255');
+        },
+      },
+    ],
   },
-  {
-    id: 'morgrath',
-    name: 'Morgrath, the Grafted Lord',
-    sprite: 'morgrath',
-    row: 'front',
-    hp: 1400,
-    atk: 17,
-    armor: 30,
-    interval: 1.4,
-    cost: 99,
-    boss: true,
-    size: 2,
-    lore: 'He sewed the limbs of the fallen to his own. He calls it a gift. He calls it a crown.',
-    setup: (u) => {
-      u.tick = (b, self, dt) => {
-        every(self, 'graft', 8, dt, () => {
-          const hands = b.allies(self).filter((a) => a.key === 'grafted_hand').length;
-          if (hands >= 4) return;
-          b.emit({ t: 'cast', uid: self.uid, name: 'Graft' });
-          for (let i = 0; i < 2; i++) b.spawn(scaledAdd(self, 'grafted_hand'));
-        });
-      };
-      u.onHurt = (b, self) => {
-        if (!self.flags.enraged && self.hp < self.maxHp * 0.5) {
-          self.flags.enraged = true;
-          b.emit({ t: 'banner', text: 'Morgrath tears at his grafts!' });
-          b.addStatus(self, 'haste', 999, 50);
-        }
-      };
-    },
+  fish_guy: {
+    id: 'fish_guy',
+    name: 'Microwave Fish Guy',
+    sprite: 'fish_guy',
+    blurb: 'Reheats salmon in the break room. Poisons everyone.',
+    hp: 46,
+    atk: 5,
+    style: 'ranged',
+    color: '#7cff4f',
+    quotes: ["It's just salmon!", 'Lunch time'],
+    skills: [
+      {
+        id: 'salmon',
+        name: 'Reheated Salmon',
+        cd: 3,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.5);
+          for (const h of aoe(b, u, 0.2, '124,255,79')) b.dot(u, h, 'poison', 0.4, 3);
+        },
+      },
+    ],
   },
-
-  // ---- Region II: The Black Fortress ----
-  {
-    id: 'uruk_brute',
-    name: 'Uruk Brute',
-    sprite: 'uruk',
-    row: 'front',
-    hp: 300,
-    atk: 19,
-    armor: 25,
-    interval: 1.5,
-    cost: 2,
-    setup: (u) => {
-      u.onHitLand = (b, _self, tgt, dmg) => {
-        if (dmg > 0 && b.rng.chance(0.15)) b.addStatus(tgt, 'stun', 0.6);
-      };
-    },
-    lore: 'Bred in the pits beneath the fortress. It has never seen the sun. It hates you for having seen it.',
+  loud_typer: {
+    id: 'loud_typer',
+    name: 'Mechanical Keyboard Guy',
+    sprite: 'loud_typer',
+    blurb: 'CLACK CLACK CLACK. Can stun.',
+    hp: 38,
+    atk: 7,
+    style: 'melee',
+    quotes: ['Blue switches, baby'],
+    skills: [
+      {
+        id: 'clack',
+        name: 'CLACK CLACK',
+        cd: 3,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.3);
+          const t = single(b, u, 0.9);
+          if (t) b.stun(t, 1, 0.6);
+        },
+      },
+    ],
   },
-  {
-    id: 'uruk_crossbow',
-    name: 'Uruk Crossbowman',
-    sprite: 'uruk_crossbow',
-    row: 'back',
-    hp: 170,
-    atk: 22,
-    armor: 15,
-    interval: 1.9,
-    ranged: true,
-    attackKind: 'arrow',
-    cost: 2,
-    lore: 'The bolts are black iron, forged in a furnace that never cools.',
-  },
-  {
-    id: 'warg',
-    name: 'Warg',
-    sprite: 'warg',
-    row: 'front',
-    hp: 190,
-    atk: 12,
-    armor: 10,
-    interval: 0.8,
-    attackKind: 'claw',
-    cost: 2,
-    setup: onHitStatus('bleed', 0.3, 0.35),
-    lore: 'Wolves that drank from the fortress cisterns. They grew. They grew hungry.',
-  },
-  {
-    id: 'fortress_shaman',
-    name: 'Fortress Shaman',
-    sprite: 'shaman',
-    row: 'back',
-    hp: 180,
-    atk: 10,
-    armor: 10,
-    interval: 1.6,
-    ranged: true,
-    attackKind: 'shadow',
-    cost: 3,
-    setup: (u) => {
-      u.energyPerAttack = 34;
-      u.skillName = 'Dark Chant';
-      u.skill = (b, self) => {
-        const allies = b.allies(self);
-        const t = allies.reduce((a, c) => (c.hp / c.maxHp < a.hp / a.maxHp ? c : a));
-        b.heal(self, t, t.maxHp * 0.25);
-        for (const a of allies) b.addStatus(a, 'empower', 4, 20);
-      };
-    },
-    lore: 'He whispers the Dark Lord\'s name into wounds, and they close out of fear.',
-  },
-  {
-    id: 'iron_warden',
-    name: 'The Iron Warden',
-    sprite: 'iron_warden',
-    row: 'front',
-    hp: 3600,
-    atk: 26,
-    armor: 85,
-    interval: 1.7,
-    cost: 99,
-    boss: true,
-    size: 2,
-    lore: 'Gatekeeper of the Black Fortress. Beneath the iron there is only more iron, and an eye that never closes.',
-    setup: (u) => {
-      u.tick = (b, self, dt) => {
-        every(self, 'slam', 6, dt, () => {
-          b.emit({ t: 'cast', uid: self.uid, name: 'Ground Slam' });
-          b.emit({ t: 'shake', power: 5 });
-          const front = b.foes(self).filter((f) => f.row === 'front');
-          for (const f of front.length ? front : b.foes(self)) {
-            b.dealDamage(self, f, self.atk * 1.3, { kind: 'melee', isSkill: true });
-            b.addStatus(f, 'stun', 1.2);
-          }
-        });
-        every(self, 'gaze', 9, dt, () => {
-          const foes = b.foes(self);
-          if (!foes.length) return;
-          const t = b.rng.pick(foes);
-          b.emit({ t: 'banner', text: `The Lidless Gaze falls upon the ${t.name}` });
-          b.addStatus(t, 'mark', 5, 50);
-        });
-      };
-    },
+  close_talker: {
+    id: 'close_talker',
+    name: 'Close Talker',
+    sprite: 'close_talker',
+    blurb: 'Way too close. Weakens whoever he corners.',
+    hp: 48,
+    atk: 7,
+    style: 'melee',
+    quotes: ['So anyway...', 'Got a sec?'],
+    skills: [
+      {
+        id: 'corner',
+        name: 'Got a Sec?',
+        cd: 3,
+        use(b, u) {
+          quip(b, u, 0.5);
+          const t = single(b, u, 1);
+          if (t) b.addStatus(t, 'weaken', 2, 0.25);
+        },
+      },
+    ],
   },
 
-  // ---- Region III: The Mount of Cinders ----
-  {
-    id: 'cinder_imp',
-    name: 'Cinder Imp',
-    sprite: 'imp',
-    row: 'back',
-    hp: 170,
-    atk: 17,
-    interval: 1.2,
-    dodge: 0.15,
-    ranged: true,
-    attackKind: 'fire',
-    cost: 2,
-    setup: onHitStatus('burn', 0.4, 0.3),
-    lore: 'Sparks from the mountain that learned to laugh.',
-  },
-  {
-    id: 'magma_golem',
-    name: 'Magma Golem',
-    sprite: 'golem',
-    row: 'front',
-    hp: 680,
-    atk: 25,
-    armor: 45,
-    interval: 2.0,
-    cost: 4,
-    setup: onHitStatus('burn', 1, 0.35),
-    lore: 'The mountain\'s heart, given legs and a grudge.',
-  },
-  {
-    id: 'flame_cultist',
-    name: 'Flame Cultist',
-    sprite: 'cultist',
-    row: 'back',
+  // ------------------------------------------------------------ bosses
+  manager: {
+    id: 'manager',
+    name: 'The Middle Manager',
+    sprite: 'manager',
+    blurb: 'Tall, balding and always smiling. Buries the party in memos and traps people in meetings.',
     hp: 240,
-    atk: 15,
-    armor: 10,
-    interval: 1.5,
-    ranged: true,
-    attackKind: 'fire',
-    cost: 3,
-    setup: (u) => {
-      u.energyPerAttack = 30;
-      u.skillName = 'Rite of Embers';
-      u.skill = (b, self) => {
-        for (const a of b.allies(self)) {
-          b.addStatus(a, 'empower', 5, 30);
-          b.addStatus(a, 'haste', 5, 20);
-        }
-      };
-    },
-    lore: 'They walk into the fire to be reborn. Most are not.',
-  },
-  {
-    id: 'ash_wraith',
-    name: 'Ash Wraith',
-    sprite: 'wraith',
-    row: 'front',
-    hp: 260,
-    atk: 22,
-    interval: 1.1,
-    dodge: 0.35,
-    attackKind: 'shadow',
-    targeting: 'back',
-    cost: 3,
-    lore: 'Ash that remembers being a person. It drifts past shields toward softer things.',
-  },
-  {
-    id: 'vyrmora',
-    name: 'Vyrmora, the Ember Wyrm',
-    sprite: 'vyrmora',
-    row: 'front',
-    hp: 6000,
-    atk: 34,
-    armor: 50,
-    interval: 1.6,
-    cost: 99,
+    atk: 11,
     boss: true,
-    size: 2,
-    lore: 'The last dragon of the old world sleeps in the mountain. It is not asleep.',
-    setup: (u) => {
-      u.tick = (b, self, dt) => {
-        every(self, 'breath', 7, dt, () => {
-          b.emit({ t: 'cast', uid: self.uid, name: 'Cinder Breath' });
-          b.emit({ t: 'aoe', side: 'hero', kind: 'fire' });
-          b.emit({ t: 'shake', power: 4 });
-          for (const f of b.foes(self)) {
-            b.dealDamage(self, f, self.atk * 0.9, { kind: 'fire', isSkill: true });
-            b.addStatus(f, 'burn', 4, self.atk * 0.2, self);
+    style: 'ranged',
+    color: '#4fc3ff',
+    quotes: ['Quick sync?', "Let's circle back.", 'Per my last memo...'],
+    skills: [
+      {
+        id: 'meeting',
+        name: 'Meeting Invite',
+        cd: 5,
+        first: 3,
+        ult: true,
+        use(b, u) {
+          const t = b.pickHeroTarget(u);
+          if (!t) return;
+          b.say(u, 'This could have been an email');
+          b.anim(u, t, 'cast', { color: '#b48cff' });
+          b.addStatus(t, 'stun', 3);
+          b.dot(u, t, 'meeting', 0.6, 3);
+        },
+      },
+      {
+        id: 'memos',
+        name: 'Memo Storm',
+        cd: 2,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.4);
+          aoe(b, u, 0.8, '79,195,255');
+        },
+      },
+    ],
+  },
+  mascot: {
+    id: 'mascot',
+    name: 'The Corporate Mascot',
+    sprite: 'mascot',
+    blurb: "The company's eagle mascot, and it has a deafening screech.",
+    hp: 270,
+    atk: 12,
+    boss: true,
+    style: 'melee',
+    skills: [
+      {
+        id: 'allhands',
+        name: 'All-Hands Screech',
+        cd: 5,
+        first: 3,
+        ult: true,
+        use(b, u) {
+          b.say(u, 'SKREEEEE!');
+          for (const h of aoe(b, u, 0.3, '255,122,224')) {
+            b.stun(h, 1);
+            b.dot(u, h, 'poison', 0.5, 3);
           }
-        });
-      };
-      u.onHurt = (b, self) => {
-        if (!self.flags.molted && self.hp < self.maxHp * 0.5) {
-          self.flags.molted = true;
-          b.emit({ t: 'banner', text: 'Vyrmora\'s scales run molten!' });
-          b.addShield(self, self.maxHp * 0.2);
-        }
-        if (!self.flags.enraged && self.hp < self.maxHp * 0.25) {
-          self.flags.enraged = true;
-          b.addStatus(self, 'haste', 999, 40);
-        }
-      };
-    },
+        },
+      },
+      {
+        id: 'screech',
+        name: 'Screech',
+        cd: 2,
+        first: 1,
+        use(b, u) {
+          b.shake(3);
+          aoe(b, u, 0.75, '200,200,220');
+        },
+      },
+    ],
   },
-
-  // ---- Region IV: The Shattered Throne ----
-  {
-    id: 'throne_knight',
-    name: 'Throne Knight',
-    sprite: 'throne_knight',
-    row: 'front',
-    hp: 860,
-    atk: 32,
-    armor: 70,
-    interval: 1.6,
-    cost: 4,
-    setup: (u) => {
-      u.tick = (b, self, dt) => every(self, 'guard', 8, dt, () => b.addShield(self, self.maxHp * 0.2));
-    },
-    lore: 'The king\'s guard did not abandon him. That was their mistake.',
-  },
-  {
-    id: 'fallen_templar',
-    name: 'Fallen Templar',
-    sprite: 'templar',
-    row: 'front',
-    hp: 560,
-    atk: 28,
-    armor: 40,
-    interval: 1.2,
-    lifesteal: 0.3,
-    attackKind: 'melee',
-    cost: 3,
-    lore: 'Once a paladin. The gold flaked off. What was underneath was hungry.',
-  },
-  {
-    id: 'hollow_sorcerer',
-    name: 'Hollow Sorcerer',
-    sprite: 'hollow_sorcerer',
-    row: 'back',
-    hp: 360,
-    atk: 26,
-    armor: 10,
-    interval: 1.8,
-    ranged: true,
-    attackKind: 'bolt',
-    cost: 3,
-    setup: (u) => {
-      u.energyPerAttack = 34;
-      u.skillName = 'Dark Comet';
-      u.skill = (b, self) => {
-        b.emit({ t: 'aoe', side: 'hero', kind: 'shadow' });
-        for (const f of b.foes(self)) b.dealDamage(self, f, self.atk * 0.8, { kind: 'shadow', isSkill: true });
-      };
-    },
-    lore: 'The academy\'s brightest. Their stars went out one by one.',
-  },
-  {
-    id: 'crowned_wight',
-    name: 'Crowned Wight',
-    sprite: 'wight',
-    row: 'back',
-    hp: 440,
-    atk: 24,
-    armor: 20,
-    interval: 1.4,
-    ranged: true,
-    attackKind: 'shadow',
-    cost: 4,
-    setup: (u) => {
-      u.onHitLand = (b, _s, tgt, dmg) => dmg > 0 && b.addStatus(tgt, 'weaken', 3, 25);
-    },
-    lore: 'A pretender to the throne, crowned in the dark. There have been many.',
-  },
-  {
-    id: 'hollow_king',
-    name: 'The Hollow King',
-    sprite: 'hollow_king',
-    row: 'front',
-    hp: 10000,
-    atk: 42,
-    armor: 60,
-    interval: 1.5,
-    cost: 99,
+  legacy_code: {
+    id: 'legacy_code',
+    name: 'Legacy Code',
+    sprite: 'legacy_code',
+    blurb: 'Twenty years of spaghetti code that came alive. Hits hard and can lock out every ability.',
+    hp: 290,
+    atk: 13,
+    def: 0.1,
     boss: true,
-    size: 2,
-    lore: 'He sat the throne until he became it. To end the age, the throne must fall.',
-    setup: (u) => {
-      u.tick = (b, self, dt) => {
-        every(self, 'decree', 9, dt, () => {
-          if (b.allies(self).filter((a) => a.key === 'throne_knight').length >= 2) return;
-          b.emit({ t: 'cast', uid: self.uid, name: 'Royal Decree' });
-          b.spawn(scaledAdd(self, 'throne_knight', 0.35));
-        });
-        every(self, 'drain', 10, dt, () => {
-          b.emit({ t: 'cast', uid: self.uid, name: 'Drain of Ages' });
-          b.emit({ t: 'aoe', side: 'hero', kind: 'shadow' });
-          let total = 0;
-          for (const f of b.foes(self)) total += b.dealDamage(self, f, self.atk * 0.7, { kind: 'shadow', isSkill: true });
-          b.heal(null, self, total);
-        });
-      };
-      u.onHurt = (b, self) => {
-        if (!self.flags.fall && self.hp < self.maxHp * 0.3) {
-          self.flags.fall = true;
-          b.emit({ t: 'banner', text: 'THE THRONE BEGINS TO FALL' });
-          b.emit({ t: 'shake', power: 8 });
-          b.addStatus(self, 'haste', 999, 60);
-          b.addStatus(self, 'empower', 999, 30);
-        }
-      };
-    },
+    style: 'melee',
+    quotes: ['NullReferenceException', 'TODO: fix later', 'segfault (core dumped)'],
+    skills: [
+      {
+        id: 'update',
+        name: 'Mandatory Update',
+        cd: 5,
+        first: 3,
+        ult: true,
+        use(b, u) {
+          b.say(u, 'Restart required. Do not turn off your computer.');
+          b.anim(u, undefined, 'cast', { color: '#7cff4f' });
+          b.aoe('hero', '124,255,79');
+          for (const h of b.foesOf(u)) b.addStatus(h, 'silence', 2);
+        },
+      },
+      {
+        id: 'overflow',
+        name: 'Stack Overflow',
+        cd: 2,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.4);
+          const t = b.pickHeroTarget(u);
+          if (!t) return;
+          for (let i = 0; i < 3 && t.alive; i++) {
+            b.anim(u, t, 'melee');
+            b.hit(u, t, 0.6);
+            b.beat(0.15);
+          }
+        },
+      },
+    ],
   },
-];
-
-export const ENEMIES: Record<string, EnemyDef> = Object.fromEntries(E.map((e) => [e.id, e]));
-
-export interface Region {
-  name: string;
-  subtitle: string;
-  roster: string[];
-  boss: string;
-  bossMinions: string[];
-  intro: string;
-  sky: [string, string];
-}
-
-export const REGIONS: Region[] = [
-  {
-    name: 'The Ashen Plains',
-    subtitle: 'where the war ended and no one stopped fighting',
-    roster: ['hollow', 'hollow_archer', 'carrion_hound', 'grave_warden'],
-    boss: 'morgrath',
-    bossMinions: ['hollow', 'hollow_archer'],
-    intro: 'Grey snow falls that is not snow. The banners of a dead kingdom still fly.',
-    sky: ['#2a2430', '#6b5a5a'],
+  hr_rep: {
+    id: 'hr_rep',
+    name: 'The HR Rep',
+    sprite: 'hr_rep',
+    blurb: 'Cardigan, clipboard, zero tolerance. Crowd control, AoE, and she comes down hardest on your top performer.',
+    hp: 280,
+    atk: 13,
+    dodge: 0.15,
+    boss: true,
+    style: 'melee',
+    quotes: ["Let's keep it professional.", "I'm going to need that in writing.", 'This is going in your file.'],
+    skills: [
+      {
+        id: 'complaint',
+        name: 'Formal Complaint',
+        cd: 5,
+        first: 3,
+        ult: true,
+        use(b, u) {
+          const top = strongest(b, u);
+          b.say(u, top ? `${top.name}, a word.` : 'Everyone, a word.');
+          b.anim(u, undefined, 'cast', { color: '#ffd23f' });
+          b.aoe('hero', '255,210,63');
+          b.shake(5);
+          for (const h of b.foesOf(u)) {
+            b.hit(u, h, h === top ? 2.4 : 1, { noDodge: true });
+            b.stun(h, 1);
+          }
+        },
+      },
+      {
+        id: 'writeup',
+        name: 'Write-Up',
+        cd: 3,
+        first: 2,
+        use(b, u) {
+          const top = strongest(b, u);
+          const tgt = top && b.rng.chance(0.5) ? top : b.pickHeroTarget(u);
+          if (!tgt) return;
+          quip(b, u, 0.5);
+          b.anim(u, tgt, 'melee');
+          if (b.hit(u, tgt, 1.1) > 0) b.stun(tgt, 1);
+        },
+      },
+      {
+        id: 'policy',
+        name: 'Policy Update',
+        cd: 2,
+        first: 1,
+        use(b, u) {
+          aoe(b, u, 0.6, '255,154,31');
+        },
+      },
+    ],
   },
-  {
-    name: 'The Black Fortress',
-    subtitle: 'seat of the Dark Lord\'s iron will',
-    roster: ['uruk_brute', 'uruk_crossbow', 'warg', 'fortress_shaman'],
-    boss: 'iron_warden',
-    bossMinions: ['uruk_brute', 'uruk_crossbow'],
-    intro: 'A tower of black iron pierces the clouds. At its peak, an eye of fire turns toward you.',
-    sky: ['#120c10', '#5a1e14'],
+  director: {
+    id: 'director',
+    name: 'The Logistics Director',
+    sprite: 'director',
+    blurb: 'Hi-vis vest, hard hat, endless reroutes. Turns heroes against each other and reassigns your best one.',
+    hp: 310,
+    atk: 13,
+    boss: true,
+    style: 'melee',
+    quotes: ['Per the logistics plan...', "That's not in the SOP.", 'Rerouting.'],
+    skills: [
+      {
+        id: 'reassign',
+        name: 'Reassignment',
+        cd: 6,
+        first: 3,
+        ult: true,
+        use(b, u) {
+          const t = strongest(b, u) ?? b.pickHeroTarget(u);
+          if (!t) return;
+          b.say(u, `${t.name}, you've been reassigned.`);
+          b.anim(u, t, 'cast', { color: '#9aa0b8' });
+          b.addStatus(t, 'away', 3);
+        },
+      },
+      {
+        id: 'reroute',
+        name: 'Reroute Shipment',
+        cd: 2,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.4);
+          const hs = b.rng.shuffle(b.foesOf(u)).slice(0, 2);
+          b.anim(u, undefined, 'cast', { color: '#ff7ae0' });
+          for (const h of hs) {
+            b.hit(u, h, 0.6);
+            b.addStatus(h, 'confuse', 1, 0, u.uid);
+          }
+        },
+      },
+    ],
   },
-  {
-    name: 'The Mount of Cinders',
-    subtitle: 'the forge-heart of the world',
-    roster: ['cinder_imp', 'magma_golem', 'flame_cultist', 'ash_wraith'],
-    boss: 'vyrmora',
-    bossMinions: ['flame_cultist', 'cinder_imp'],
-    intro: 'The ground glows. The air tastes of iron and old dragons.',
-    sky: ['#1a0806', '#a8361a'],
+
+  // ------------------------------------------------------------ Villiam Burginson's
+  crew: {
+    id: 'crew',
+    name: 'Crew Member',
+    sprite: 'crew',
+    blurb: 'Would you like fries with that?',
+    hp: 48,
+    atk: 8,
+    dodge: 0.08,
+    style: 'ranged',
+    color: '#ffd23f',
+    quotes: ['Would you like fries with that?', 'Pull up to the window!'],
+    skills: [
+      {
+        id: 'fries',
+        name: 'Fry Toss',
+        cd: 3,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.4);
+          aoe(b, u, 0.6, '255,210,63');
+        },
+      },
+    ],
   },
-  {
-    name: 'The Shattered Throne',
-    subtitle: 'where the age must end',
-    roster: ['throne_knight', 'fallen_templar', 'hollow_sorcerer', 'crowned_wight'],
-    boss: 'hollow_king',
-    bossMinions: ['fallen_templar', 'crowned_wight'],
-    intro: 'The great rune is broken. Its shards hang in the air like frozen lightning.',
-    sky: ['#0c0a18', '#3e3466'],
+  cook: {
+    id: 'cook',
+    name: 'Line Cook',
+    sprite: 'cook',
+    blurb: 'Flings hot grease.',
+    hp: 55,
+    atk: 9,
+    style: 'melee',
+    quotes: ['Order up!', 'Behind!', 'Heard, chef.'],
+    skills: [
+      {
+        id: 'grease',
+        name: 'Hot Grease',
+        cd: 2,
+        first: 1,
+        use(b, u) {
+          quip(b, u, 0.3);
+          const t = single(b, u, 0.9, 'ranged');
+          if (t) b.dot(u, t, 'burn', 0.7, 3);
+        },
+      },
+    ],
   },
-];
+  coworker: {
+    id: 'coworker',
+    name: 'Coworker',
+    sprite: 'coworker',
+    blurb: 'Covers shifts and patches up the crew.',
+    hp: 44,
+    atk: 7,
+    style: 'melee',
+    quotes: ['Can you cover my shift?', "I'm on break."],
+    skills: [
+      {
+        id: 'cover',
+        name: 'Cover My Shift',
+        cd: 3,
+        first: 1,
+        use(b, u) {
+          const hurt = b.alliesOf(u).sort((a, c) => a.hp / a.maxHp - c.hp / c.maxHp)[0];
+          if (!hurt) return;
+          quip(b, u, 0.3);
+          b.anim(u, undefined, 'cast', { color: '#5effc8' });
+          b.heal(hurt, hurt.maxHp * 0.25);
+          b.addStatus(hurt, 'guard', 2, 0.2);
+        },
+      },
+    ],
+  },
+};
 
-export const WAVES_PER_REGION = 10;
-
-export function regionIndex(wave: number): number {
-  return Math.floor((wave - 1) / WAVES_PER_REGION) % REGIONS.length;
-}
-
-/** Each full pass through all regions is a new cycle ("Ascension"). */
-export function cycleOf(wave: number): number {
-  return Math.floor((wave - 1) / (WAVES_PER_REGION * REGIONS.length));
-}
-
-export function isBossWave(wave: number): boolean {
-  return wave % WAVES_PER_REGION === 0;
-}
-
-export function waveScale(wave: number): { hp: number; atk: number } {
-  const w = wave - 1;
-  const cycle = cycleOf(wave);
-  const c = Math.pow(2, cycle);
-  return { hp: Math.pow(1.06, w) * c, atk: Math.pow(1.045, w) * c };
-}
-
-export function makeEnemy(id: string, wave: number): Unit {
-  const d = ENEMIES[id];
-  const s = waveScale(wave);
-  const u = makeUnit({
-    side: 'enemy',
-    key: d.id,
-    name: d.name,
-    sprite: d.sprite,
-    row: d.row,
-    maxHp: Math.round(d.hp * s.hp),
-    atk: d.atk * s.atk,
-    armor: d.armor ?? 0,
-    interval: d.interval,
-    crit: d.crit ?? 0.05,
-    dodge: d.dodge ?? 0,
-    lifesteal: d.lifesteal ?? 0,
-    ranged: d.ranged ?? false,
-    attackKind: d.attackKind ?? 'melee',
-    targeting: d.targeting ?? (d.ranged ? 'random' : 'front'),
-    boss: d.boss ?? false,
-    size: d.size ?? 1,
-    energyPerAttack: 0,
-  });
-  d.setup?.(u);
-  return u;
-}
-
-/** Adds summoned by a boss share its scaling so they stay relevant. */
-function scaledAdd(boss: Unit, id: string, frac = 1): Unit {
-  const d = ENEMIES[id];
-  const bd = ENEMIES[boss.key];
-  const ratio = boss.atk / bd.atk;
-  const hpRatio = boss.maxHp / bd.hp;
-  const u = makeEnemy(id, 1);
-  u.maxHp = u.hp = Math.round(d.hp * hpRatio * frac);
-  u.atk = d.atk * ratio * Math.max(0.6, frac);
-  u.summon = true;
-  return u;
-}
+/** Bosses a cycle can draw from. Add new bosses here (and give them story lines in src/data/story.ts). */
+export const BOSS_POOL = ['manager', 'mascot', 'legacy_code', 'hr_rep', 'director'];
+export const MINIONS_EARLY = ['energy_drink', 'nic_pouch', 'reply_all', 'close_talker'];
+export const MINIONS_LATE = ['tallboy', 'pouch_tin', 'fish_guy', 'loud_typer'];
+export const BURGER_CREW = ['crew', 'cook', 'coworker'];
